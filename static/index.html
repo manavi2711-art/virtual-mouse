@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Virtual Mouse — Hand Gesture Control</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0f0f0f; color: #eee; font-family: 'Segoe UI', sans-serif; display: flex; flex-direction: column; align-items: center; min-height: 100vh; padding: 20px; }
+    h1 { margin-bottom: 16px; font-size: 1.5rem; color: #00e5a0; }
+    #container { position: relative; width: 640px; max-width: 100%; }
+    #output { width: 100%; border-radius: 10px; border: 2px solid #333; background: #111; display: block; }
+    video { display: none; }
+    #hud { margin-top: 12px; background: #1a1a1a; border-radius: 8px; padding: 14px 20px; width: 100%; }
+    #gesture { font-size: 1.4rem; font-weight: bold; color: #00e5a0; }
+    #fingers { margin-top: 8px; display: flex; gap: 10px; }
+    .finger { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: bold; background: #333; color: #aaa; transition: background 0.15s; }
+    .finger.up { background: #00e5a0; color: #000; }
+    #status { margin-top: 8px; font-size: 0.85rem; color: #888; }
+    #startBtn { margin-top: 16px; padding: 10px 28px; background: #00e5a0; color: #000; border: none; border-radius: 6px; font-size: 1rem; font-weight: bold; cursor: pointer; }
+    #startBtn:hover { background: #00c98a; }
+    #startBtn:disabled { background: #444; color: #888; cursor: default; }
+  </style>
+</head>
+<body>
+  <h1>🖐 Virtual Mouse — Hand Gesture Control</h1>
+  <div id="container">
+    <img id="output" src="" alt="Camera feed" height="480"/>
+    <video id="video" width="640" height="480" autoplay playsinline></video>
+  </div>
+  <div id="hud">
+    <div id="gesture">Gesture: —</div>
+    <div id="fingers">
+      <div class="finger" id="f0">T</div>
+      <div class="finger" id="f1">I</div>
+      <div class="finger" id="f2">M</div>
+      <div class="finger" id="f3">R</div>
+      <div class="finger" id="f4">P</div>
+    </div>
+    <div id="status">Click Start to begin</div>
+  </div>
+  <button id="startBtn" onclick="start()">Start Camera</button>
+
+  <canvas id="canvas" width="320" height="240" style="display:none"></canvas>
+
+  <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const output = document.getElementById('output');
+    const gestureEl = document.getElementById('gesture');
+    const statusEl = document.getElementById('status');
+    let running = false;
+
+    async function start() {
+      const btn = document.getElementById('startBtn');
+      btn.disabled = true;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+        video.srcObject = stream;
+        await video.play();
+        running = true;
+        btn.textContent = 'Running…';
+        statusEl.textContent = 'Processing frames…';
+        loop();
+      } catch (e) {
+        statusEl.textContent = 'Camera error: ' + e.message;
+        btn.disabled = false;
+      }
+    }
+
+    async function loop() {
+      if (!running) return;
+      ctx.drawImage(video, 0, 0, 320, 240);
+      const base64 = canvas.toDataURL('image/jpeg', 0.5);
+
+      try {
+        const res = await fetch('/process', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image: base64 })
+        });
+        const data = await res.json();
+
+        if (data.annotated_frame) output.src = data.annotated_frame;
+        gestureEl.textContent = 'Gesture: ' + (data.gesture || '—');
+
+        const names = ['T','I','M','R','P'];
+        names.forEach((_, i) => {
+          const el = document.getElementById('f' + i);
+          el.classList.toggle('up', !!(data.fingers && data.fingers[i]));
+        });
+      } catch (_) {}
+
+      // Wait for response before sending next frame (prevents buffering)
+      setTimeout(loop, 50);
+    }
+  </script>
+</body>
+</html>
