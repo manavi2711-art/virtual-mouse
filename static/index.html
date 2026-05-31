@@ -72,7 +72,7 @@
     async function loop() {
       if (!running) return;
       ctx.drawImage(video, 0, 0, 320, 240);
-      const base64 = canvas.toDataURL('image/jpeg', 0.5);
+      const base64 = canvas.toDataURL('image/jpeg', 0.4);
 
       try {
         const res = await fetch('/process', {
@@ -93,7 +93,7 @@
       } catch (_) {}
 
       // Wait for response before sending next frame (prevents buffering)
-      setTimeout(loop, 50);
+      setTimeout(loop, 150);
     }
   </script>
 </body>
