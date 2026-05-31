@@ -1,153 +1,73 @@
-"""
-Hand Detector Module
-====================
-Uses MediaPipe Hands to detect and track hand landmarks in real-time.
-Provides 21 landmark points per hand for gesture recognition.
-"""
-
 import cv2
 import mediapipe as mp
 import numpy as np
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+from mediapipe.framework.formats import landmark_pb2
+import urllib.request
+import os
 
+MODEL_PATH = "/tmp/hand_landmarker.task"
+MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+
+def _ensure_model():
+    if not os.path.exists(MODEL_PATH):
+        urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
+
+TIP_IDS = [4, 8, 12, 16, 20]
 
 class HandDetector:
-    """
-    Wraps MediaPipe Hands for easy hand detection and landmark extraction.
-    """
-
-    # Finger tip landmark IDs
-    TIP_IDS = [4, 8, 12, 16, 20]  # Thumb, Index, Middle, Ring, Pinky
-
-    def __init__(self, max_hands=1, detection_conf=0.8, tracking_conf=0.8):
-        self.mp_hands = mp.solutions.hands
-        self.hands = self.mp_hands.Hands(
-            static_image_mode=False,
-            max_num_hands=max_hands,
-            min_detection_confidence=detection_conf,
-            min_tracking_confidence=tracking_conf
+    def __init__(self, max_hands=1, detection_conf=0.7, tracking_conf=0.7):
+        _ensure_model()
+        options = vision.HandLandmarkerOptions(
+            base_options=python.BaseOptions(model_asset_path=MODEL_PATH),
+            num_hands=max_hands,
+            min_hand_detection_confidence=detection_conf,
+            min_hand_presence_confidence=tracking_conf,
         )
-        self.mp_draw = mp.solutions.drawing_utils
-        self.draw_spec = self.mp_draw.DrawingSpec(thickness=2, circle_radius=2)
+        self.landmarker = vision.HandLandmarker.create_from_options(options)
         self.results = None
 
     def find_hands(self, frame, draw=True):
-        """Detect hands in a BGR frame and optionally draw landmarks."""
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        rgb.flags.writeable = False
-        self.results = self.hands.process(rgb)
-        rgb.flags.writeable = True
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        self.results = self.landmarker.detect(mp_image)
 
-        if self.results.multi_hand_landmarks and draw:
-            for hand_lm in self.results.multi_hand_landmarks:
-                self.mp_draw.draw_landmarks(
-                    frame,
-                    hand_lm,
-                    self.mp_hands.HAND_CONNECTIONS,
-                    self.draw_spec,
-                    self.draw_spec
-                )
-
+        if draw and self.results.hand_landmarks:
+            h, w = frame.shape[:2]
+            for hand in self.results.hand_landmarks:
+                pts = [(int(lm.x * w), int(lm.y * h)) for lm in hand]
+                connections = vision.HandLandmarker.HAND_CONNECTIONS if hasattr(vision.HandLandmarker, 'HAND_CONNECTIONS') else mp.solutions.hands.HAND_CONNECTIONS
+                for i, j in [(0,1),(1,2),(2,3),(3,4),(0,5),(5,6),(6,7),(7,8),
+                              (0,9),(9,10),(10,11),(11,12),(0,13),(13,14),(14,15),
+                              (15,16),(0,17),(17,18),(18,19),(19,20),(5,9),(9,13),(13,17)]:
+                    cv2.line(frame, pts[i], pts[j], (0, 200, 100), 2)
+                for pt in pts:
+                    cv2.circle(frame, pt, 4, (255, 255, 255), -1)
         return frame
 
     def get_landmarks(self, frame):
-        """
-        Returns list of (x, y) pixel coordinates for all 21 landmarks.
-        Returns empty list if no hand detected.
-        """
-        landmarks = []
-
-        if self.results and self.results.multi_hand_landmarks:
-            h, w, _ = frame.shape
-
-            hand = self.results.multi_hand_landmarks[0]
-
-            for lm in hand.landmark:
-                landmarks.append((int(lm.x * w), int(lm.y * h)))
-
-        return landmarks
+        if not self.results or not self.results.hand_landmarks:
+            return []
+        h, w = frame.shape[:2]
+        return [(int(lm.x * w), int(lm.y * h)) for lm in self.results.hand_landmarks[0]]
 
     def get_normalized_landmarks(self):
-        """
-        Returns flattened normalized [x, y, z] coordinates (63 values).
-        Used as feature vector for the MLP gesture classifier.
-        """
-
-        if self.results and self.results.multi_hand_landmarks:
-
-            hand = self.results.multi_hand_landmarks[0]
-
-            coords = []
-
-            for lm in hand.landmark:
-                coords.extend([lm.x, lm.y, lm.z])
-
-            return np.array(coords, dtype=np.float32)
-
-        return None
+        if not self.results or not self.results.hand_landmarks:
+            return None
+        coords = []
+        for lm in self.results.hand_landmarks[0]:
+            coords.extend([lm.x, lm.y, lm.z])
+        return np.array(coords, dtype=np.float32)
 
     def fingers_up(self, landmarks):
-        """
-        Returns a list of 5 booleans:
-        [Thumb, Index, Middle, Ring, Pinky]
-
-        1 = finger up
-        0 = finger down
-        """
-
         if len(landmarks) < 21:
             return []
-
         fingers = []
-
-        # Thumb
-        if landmarks[self.TIP_IDS[0]][0] < landmarks[self.TIP_IDS[0] - 1][0]:
-            fingers.append(1)
-        else:
-            fingers.append(0)
-
-        # Other fingers
-        for tip_id in self.TIP_IDS[1:]:
-
-            if landmarks[tip_id][1] < landmarks[tip_id - 2][1]:
-                fingers.append(1)
-            else:
-                fingers.append(0)
-
+        fingers.append(1 if landmarks[TIP_IDS[0]][0] < landmarks[TIP_IDS[0]-1][0] else 0)
+        for tip_id in TIP_IDS[1:]:
+            fingers.append(1 if landmarks[tip_id][1] < landmarks[tip_id-2][1] else 0)
         return fingers
 
     def hand_detected(self):
-        """Returns True if at least one hand is detected."""
-
-        return bool(self.results and self.results.multi_hand_landmarks)
-
-
-# TESTING MODULE
-if __name__ == "__main__":
-
-    cap = cv2.VideoCapture(0)
-
-    detector = HandDetector()
-
-    while True:
-
-        success, frame = cap.read()
-
-        if not success:
-            break
-
-        frame = cv2.flip(frame, 1)
-
-        detector.find_hands(frame)
-
-        landmarks = detector.get_landmarks(frame)
-
-        if landmarks:
-            print("Index Finger Tip:", landmarks[8])
-
-        cv2.imshow("Hand Detector Test", frame)
-
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-    cap.release()
-    cv2.destroyAllWindows()
+        return bool(self.results and self.results.hand_landmarks)
