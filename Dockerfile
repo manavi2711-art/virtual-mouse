@@ -8,9 +8,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Pre-download mediapipe model files at build time (avoids runtime download delay)
-RUN python -c "import mediapipe as mp; mp.solutions.hands.Hands()"
-
 COPY scripts/ ./scripts/
 COPY static/ ./static/
 COPY app.py .
